@@ -11,6 +11,7 @@ declare global {
   const GITHUB_ACCOUNT: string
   const GITHUB_REPO: string
   const GITHUB_TOKEN: string
+  const KEY: string
 }
 
 const SendJSON = (data: Record<string, unknown>) => {
@@ -22,10 +23,8 @@ const SendJSON = (data: Record<string, unknown>) => {
 const responses = {
   NotFound: () => new Response('Not found', { status: 404 }),
   NoContent: () => new Response(null, { status: 204 }),
-  SendUpdate: (data: TauriUpdateResponse) =>
-    SendJSON(data),
-  SendJSON
-
+  SendUpdate: (data: TauriUpdateResponse) => SendJSON(data),
+  SendJSON,
 }
 
 type RequestPathParts = [
@@ -35,7 +34,9 @@ type RequestPathParts = [
   string,
 ]
 const handleV1Request = async (request: Request) => {
-  const path = new URL(request.url).pathname
+  const url = new URL(request.url)
+  const path = url.pathname
+
   const [, target, arch, appVersion] = path
     .slice(1)
     .split('/') as RequestPathParts
@@ -44,13 +45,16 @@ const handleV1Request = async (request: Request) => {
     return responses.NotFound()
   }
   const release = await getLatestRelease(request)
+  console.log('found release', release)
 
   const remoteVersion = sanitizeVersion(release.tag_name.toLowerCase())
+  console.log('latest version', remoteVersion)
   if (!remoteVersion || !semverValid(remoteVersion)) {
     return responses.NotFound()
   }
 
   const shouldUpdate = semverGt(remoteVersion, appVersion)
+  console.log('shouldUpdate', shouldUpdate)
   if (!shouldUpdate) {
     return responses.NoContent()
   }
@@ -66,8 +70,10 @@ const handleV1Request = async (request: Request) => {
   }
 
   const signature = await findAssetSignature(match.name, release.assets)
-  const proxy = GITHUB_TOKEN?.length;
-  const downloadURL = proxy ? createProxiedFileUrl(match.browser_download_url, request) : match.browser_download_url
+  const proxy = GITHUB_TOKEN?.length
+  const downloadURL = proxy
+    ? createProxiedFileUrl(match.browser_download_url, request)
+    : match.browser_download_url
   const data: TauriUpdateResponse = {
     url: downloadURL,
     version: remoteVersion,
@@ -80,45 +86,61 @@ const handleV1Request = async (request: Request) => {
 }
 
 const createProxiedFileUrl = (downloadURL: string, request: Request) => {
-
   const fileName = downloadURL.split('/')?.at(-1)
-  if (!fileName) { throw new Error('Could not get file name from download URL') }
-
+  if (!fileName) {
+    throw new Error('Could not get file name from download URL')
+  }
 
   const path = new URL(request.url)
   const root = `${path.protocol}//${path.host}`
 
-  return new URL(`/latest/${fileName}`, root).toString()
+  return new URL(`/latest/${fileName}?key=${KEY}`, root).toString()
 }
 
 const getLatestAssets = async (request: Request) => {
-  const fileName = request.url.split('/')?.at(-1)
-  if (!fileName) { throw new Error('Could not get file name from download URL') }
+  const url = new URL(request.url)
+
+  const fileName = url.pathname.replace('/latest/', '')
+
+  if (!fileName || !fileName.trim().length) {
+    throw new Error('Could not get file name from download URL')
+  }
+
+  console.log({ fileName })
 
   const release = await getLatestRelease(request)
-  const downloadPath = release.assets.find(({ name }) => name === fileName)?.browser_download_url
+  const downloadPath = release.assets.find(({ name }) => name === fileName)?.url
 
-  if (!downloadPath) { throw new Error('Could not get file path from download URL') }
+  if (!downloadPath) {
+    throw new Error('Could not get file path from download URL')
+  }
 
-  const { readable, writable } = new TransformStream();
+  const { readable, writable } = new TransformStream()
   const file_response = await fetch(downloadPath, {
     method: 'GET',
-    redirect: 'follow'
+    redirect: 'follow',
+    headers: {
+      Authorization: `Bearer ${GITHUB_TOKEN}`,
+      'User-Agent': 'FileProxy',
+      Accept: 'application/octet-stream',
+    },
   })
 
-  file_response?.body?.pipeTo(writable);
-  return new Response(readable, file_response);
-
+  file_response?.body?.pipeTo(writable)
+  return new Response(readable, file_response)
 }
 
 export async function handleRequest(request: Request): Promise<Response> {
-  const path = new URL(request.url).pathname
+  const url = new URL(request.url)
 
+  if (url.searchParams.get('key') != KEY) {
+    return new Response('Invalid key', { status: 401 })
+  }
 
-  if (path.includes('/latest')) {
+  if (url.pathname.includes('/latest')) {
     return getLatestAssets(request)
   }
-  const version = path.slice(1).split('/')[0]
+  const version = url.pathname.slice(1).split('/')[0]
 
   if (version.includes('v')) {
     switch (version) {
