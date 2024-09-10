@@ -1,12 +1,13 @@
-name = "tauri-update-server"
+name = "karma-update-server"
 workers_dev = true
 compatibility_date = "2022-03-26"
 main = "src/index.ts"
 
 [vars]
-GITHUB_ACCOUNT = 'killeencode'
-GITHUB_REPO = 'brancato'
+GITHUB_ACCOUNT = 'ghostdevv'
+GITHUB_REPO = 'karma'
 GITHUB_TOKEN = '' # Optional - used with private repos
+KEY = ''
 
 [build]
-command = "npm install && npm run build"
+command = "npm run build"
